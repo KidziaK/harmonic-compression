@@ -21,7 +21,7 @@ def cartesian_to_spherical(points: np.ndarray) -> np.ndarray:
     return result
 
 @njit
-def get_euler_angles(theta_array: np.ndarray, phi_array: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def get_euler_angles(theta_array: np.ndarray, phi_array: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     alpha, beta, gamma = np.zeros_like(phi_array), np.zeros_like(phi_array), np.zeros_like(phi_array)
     for i in range(phi_array.shape[0]):
         theta = theta_array[i]
@@ -41,8 +41,9 @@ def get_euler_angles(theta_array: np.ndarray, phi_array: np.ndarray) -> Tuple[np
 
         alpha[i] = np.arctan2(r[1][2], r[0][2])
         beta[i] = np.arctan2(np.sqrt(1 - r[2][2] * r[2][2]), r[2][2])
+        gamma[i] = np.arctan2(r[2][1], -r[2][0])
     
-    return alpha, beta
+    return alpha, beta, gamma
 
 def harmonic_f(l: int, kappa: np.ndarray) -> np.ndarray:
     """ 
@@ -67,11 +68,9 @@ def compress(point_cloud: np.ndarray, l_max: int) -> dict:
     theta = spherical[:, 1]
     phi = spherical[:, 2]
 
-    alpha, beta = get_euler_angles(theta, phi)
-
     for l in range(l_max):
         for m in range(l+1):
-            coefficients[(m, l)] = np.mean(harmonic_f(l, kappa) * wigner_d_function(l, m, alpha, beta))
+            coefficients[(m, l)] = np.mean(harmonic_f(l, kappa) * wigner_d_function(l, m, theta, phi))
 
     return coefficients
 
@@ -111,6 +110,6 @@ if __name__ == "__main__":
         [1, 1, 1]
     ]).astype(np.float64)
     points = np.random.uniform(0, 50, size=(1000, 3))
-    coeffs = compress(points, 20)
+    coeffs = compress(points, 3)
     for (m, l), val in coeffs.items():
         print(f"f(m={m}, l={l}) = {round(np.real(val), 6)} + {round(np.imag(val), 6)}i")
