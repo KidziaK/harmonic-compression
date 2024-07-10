@@ -2,6 +2,7 @@ import numpy as np
 
 from numba import njit
 from scipy.special import iv, lpmv, factorial
+from typing import Tuple
 
 # https://mathworld.wolfram.com/SphericalCoordinates.html
 @njit
@@ -19,6 +20,30 @@ def cartesian_to_spherical(points: np.ndarray) -> np.ndarray:
         result[i] = np.array([r, theta, phi])
     return result
 
+@njit
+def get_euler_angles(theta_array: np.ndarray, phi_array: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    alpha, beta, gamma = np.zeros_like(phi_array), np.zeros_like(phi_array), np.zeros_like(phi_array)
+    for i in range(phi_array.shape[0]):
+        theta = theta_array[i]
+        phi = phi_array[i]
+
+        sin_theta = np.sin(theta)
+        cos_theta = np.cos(theta)
+
+        sin_phi = np.sin(phi)
+        cos_phi = np.cos(phi)
+
+        r = np.array([
+            [cos_theta * cos_phi, -sin_theta, cos_theta * sin_phi],
+            [sin_theta * cos_phi, cos_theta, sin_theta * sin_phi],
+            [-sin_phi, 0, cos_phi]
+        ])
+
+        alpha[i] = np.arctan2(r[1][2], r[0][2])
+        beta[i] = np.arctan2(np.sqrt(1 - r[2][2] * r[2][2]), r[2][2])
+    
+    return alpha, beta
+
 def harmonic_f(l: int, kappa: np.ndarray) -> np.ndarray:
     """ 
     Harmonic coefficient of order l of standard (mu is z-axis aligned) 3D von-mises-fisher distribution.
@@ -34,21 +59,22 @@ def wigner_d_matrix(l: int, m: int, beta: np.ndarray) -> np.ndarray:
 def wigner_d_function(l: int, m: int, alpha: np.ndarray, beta: np.ndarray) -> np.ndarray:
     return np.exp(-1.0j * alpha * m) * wigner_d_matrix(l, m, beta)
 
-def compress(point_cloud: np.ndarray, l_max: int) -> np.ndarray:
+def compress(point_cloud: np.ndarray, l_max: int) -> dict:
     spherical = cartesian_to_spherical(point_cloud)
-    num_of_harmonics = l_max * (1 + l_max) // 2
-    coefficients = np.zeros(num_of_harmonics, dtype=np.complex128)
+    coefficients = {}
 
     kappa = spherical[:, 0]
     theta = spherical[:, 1]
     phi = spherical[:, 2]
-    i = 0
+
+    alpha, beta = get_euler_angles(theta, phi)
+
     for l in range(l_max):
-        for m in range(l):
-            i += 1
-            coefficients[i] = np.mean(harmonic_f(l, kappa) * wigner_d_function(l, m, theta, phi))
+        for m in range(l+1):
+            coefficients[(m, l)] = np.mean(harmonic_f(l, kappa) * wigner_d_function(l, m, alpha, beta))
 
     return coefficients
+
 
 def test_cartesian_to_spherical():
     cartesian = np.array([
@@ -72,3 +98,19 @@ def test_cartesian_to_spherical():
     ]).astype(np.float64)
 
     assert np.allclose(spherical, expected)
+
+if __name__ == "__main__":
+    points = np.array([
+        [-1, -1, -1],
+        [1, -1, -1],
+        [-1, 1, -1],
+        [-1, -1, 1],
+        [1, 1, -1],
+        [1, -1, 1],
+        [-1, 1, 1],
+        [1, 1, 1]
+    ]).astype(np.float64)
+    points = np.random.uniform(0, 50, size=(1000, 3))
+    coeffs = compress(points, 20)
+    for (m, l), val in coeffs.items():
+        print(f"f(m={m}, l={l}) = {round(np.real(val), 6)} + {round(np.imag(val), 6)}i")
