@@ -48,7 +48,7 @@ def get_euler_angles(theta_array: np.ndarray, phi_array: np.ndarray) -> Tuple[np
 
 @cache
 def B(l: int):
-    np.sqrt((2 * l + 1) / 4 / np.pi)
+    return np.sqrt((2 * l + 1) / 4 / np.pi)
 
 def harmonic_f(l: int, kappa: np.ndarray) -> np.ndarray:
     """ 
@@ -59,7 +59,7 @@ def harmonic_f(l: int, kappa: np.ndarray) -> np.ndarray:
 
 @cache
 def A(m: int, l: int):
-    np.sqrt(factorial(l - m) / factorial(l + m))
+    return np.sqrt(factorial(l - m) / factorial(l + m))
 
 # https://en.wikipedia.org/wiki/Wigner_D-matrix
 # https://www.cambridge.org/core/books/hilbert-space-methods-in-signal-processing/BA54ECB490D53FF8CB176CFDCE34A962
