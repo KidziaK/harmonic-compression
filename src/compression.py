@@ -3,6 +3,7 @@ import numpy as np
 from numba import njit
 from scipy.special import iv, lpmv, factorial
 from typing import Tuple
+from functools import cache
 
 # https://mathworld.wolfram.com/SphericalCoordinates.html
 @njit
@@ -22,7 +23,7 @@ def cartesian_to_spherical(points: np.ndarray) -> np.ndarray:
 
 @njit
 def get_euler_angles(theta_array: np.ndarray, phi_array: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    alpha, beta, gamma = np.zeros_like(phi_array), np.zeros_like(phi_array), np.zeros_like(phi_array)
+    theta, phi, gamma = np.zeros_like(phi_array), np.zeros_like(phi_array), np.zeros_like(phi_array)
     for i in range(phi_array.shape[0]):
         theta = theta_array[i]
         phi = phi_array[i]
@@ -39,26 +40,34 @@ def get_euler_angles(theta_array: np.ndarray, phi_array: np.ndarray) -> Tuple[np
             [-sin_phi, 0, cos_phi]
         ])
 
-        alpha[i] = np.arctan2(r[1][2], r[0][2])
-        beta[i] = np.arctan2(np.sqrt(1 - r[2][2] * r[2][2]), r[2][2])
+        theta[i] = np.arctan2(r[1][2], r[0][2])
+        phi[i] = np.arctan2(np.sqrt(1 - r[2][2] * r[2][2]), r[2][2])
         gamma[i] = np.arctan2(r[2][1], -r[2][0])
     
-    return alpha, beta, gamma
+    return theta, phi, gamma
+
+@cache
+def B(l: int):
+    np.sqrt((2 * l + 1) / 4 / np.pi)
 
 def harmonic_f(l: int, kappa: np.ndarray) -> np.ndarray:
     """ 
     Harmonic coefficient of order l of standard (mu is z-axis aligned) 3D von-mises-fisher distribution.
     Since mu = (0, 0, 1), all complex spherical harmonic coefficients are equal to 0.
     """
-    return np.sqrt((2 * l + 1) / 4 / np.pi) * iv(l + 0.5, kappa) / iv(0.5, kappa)
+    return B(l) * iv(l + 0.5, kappa) / iv(0.5, kappa)
+
+@cache
+def A(m: int, l: int):
+    np.sqrt(factorial(l - m) / factorial(l + m))
 
 # https://en.wikipedia.org/wiki/Wigner_D-matrix
 # https://www.cambridge.org/core/books/hilbert-space-methods-in-signal-processing/BA54ECB490D53FF8CB176CFDCE34A962
-def wigner_d_matrix(l: int, m: int, beta: np.ndarray) -> np.ndarray:
-    return np.sqrt(factorial(l - m) / factorial(l + m)) * lpmv(m, l, np.cos(beta))
+def wigner_d_matrix(l: int, m: int, phi: np.ndarray) -> np.ndarray:
+    return A(m, l) * lpmv(m, l, np.cos(phi))
 
-def wigner_d_function(l: int, m: int, alpha: np.ndarray, beta: np.ndarray) -> np.ndarray:
-    return np.exp(-1.0j * alpha * m) * wigner_d_matrix(l, m, beta)
+def wigner_d_function(l: int, m: int, theta: np.ndarray, phi: np.ndarray) -> np.ndarray:
+    return np.exp(-1.0j * theta * m) * wigner_d_matrix(l, m, phi)
 
 def compress(point_cloud: np.ndarray, l_max: int) -> dict:
     spherical = cartesian_to_spherical(point_cloud)
@@ -73,6 +82,19 @@ def compress(point_cloud: np.ndarray, l_max: int) -> dict:
             coefficients[(m, l)] = np.mean(harmonic_f(l, kappa) * wigner_d_function(l, m, theta, phi))
 
     return coefficients
+
+def d_d_matrix_d_phi(l: int, m: int, phi: np.ndarray) -> np.ndarray:
+    cos_phi = np.cos(phi)
+    return A(m, l) * (1 / cos_phi) * (lpmv(m + 1, l, cos_phi) + m * cos_phi * lpmv(m, l, cos_phi))
+
+def d_func_d_phi(l: int, m: int, theta: np.ndarray, phi: np.ndarray) -> np.ndarray:
+    return np.exp(-1.0j * theta * m) * d_d_matrix_d_phi(l, m, phi)
+
+def d_func_d_theta(l: int, m: int, theta: np.ndarray, phi: np.ndarray) -> np.ndarray:
+    return -1.0j * m * wigner_d_function(l, m, theta, phi)
+
+def d_g_d_kappa(l: int, m: int, kappa: np.ndarray, theta: np.ndarray, phi: np.ndarray):
+    pass
 
 
 def test_cartesian_to_spherical():
