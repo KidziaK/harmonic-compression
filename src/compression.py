@@ -16,8 +16,8 @@ def cartesian_to_spherical(points: np.ndarray) -> np.ndarray:
         if np.isclose(r, 0):
             result[i] = np.array([0, 0, 0])
             continue
-        theta = np.arctan2(y, x)
-        phi = np.arccos(z / r)
+        theta =  np.mod(np.arctan2(y, x), 2 * np.pi)
+        phi = np.mod(np.arccos(z / r), np.pi)
         result[i] = np.array([r, theta, phi])
     return result
 
@@ -81,7 +81,7 @@ def wigner_d_function(m: int, l: int, theta: np.ndarray, phi: np.ndarray) -> np.
     return np.exp(-1.0j * theta * m) * wigner_d_matrix(m, l, phi)
 
 def harmonic_f(m: int, l: int, kappa: np.ndarray, theta: np.ndarray, phi: np.ndarray) -> np.ndarray:
-    return np.mean(harmonic_tilda(l, kappa) * wigner_d_function(m, l, theta, phi))
+    return np.sum(harmonic_tilda(l, kappa) * wigner_d_function(m, l, theta, phi))
 
 def compress(point_cloud: np.ndarray, l_max: int) -> dict:
     spherical = cartesian_to_spherical(point_cloud)
@@ -160,41 +160,40 @@ def d_L_d_theta(coeffs: dict, kappa: np.ndarray, theta: np.ndarray, phi: np.ndar
     d_loss = 0
     for (m, l), f in coeffs.items():
         g = harmonic_f(m, l, kappa, theta, phi)
+        sum_g = np.sum(g)
         dg = d_g_d_theta(m, l, kappa, theta, phi)
-        diff_g_f = g - f
-        # We add np.real to get rid of numerical issues.
-        # TODO fix this. The sum over i is an inner sum, not the outer sum
-        d_loss += np.real(np.sum(dg * np.conjugate(diff_g_f) + np.conjugate(dg) * diff_g_f))
+        inner_diff = sum_g - f
+        d_loss += np.real(dg * np.conjugate(inner_diff) + np.conjugate(dg) * inner_diff)
     return d_loss
 
 def d_L_d_phi(coeffs: dict, kappa: np.ndarray, theta: np.ndarray, phi: np.ndarray) -> float:
     d_loss = 0
     for (m, l), f in coeffs.items():
         g = harmonic_f(m, l, kappa, theta, phi)
+        sum_g = np.sum(g)
         dg = d_g_d_phi(m, l, kappa, theta, phi)
-        diff_g_f = g - f
-        # We add np.real to get rid of numerical issues.
-        d_loss += np.real(np.sum(dg * np.conjugate(diff_g_f) + np.conjugate(dg) * diff_g_f))
+        inner_diff = sum_g - f
+        d_loss += np.real(dg * np.conjugate(inner_diff) + np.conjugate(dg) * inner_diff)
     return d_loss
 
 def d_L_d_kappa(coeffs: dict, kappa: np.ndarray, theta: np.ndarray, phi: np.ndarray) -> float:
     d_loss = 0
     for (m, l), f in coeffs.items():
         g = harmonic_f(m, l, kappa, theta, phi)
+        sum_g = np.sum(g)
         dg = d_g_d_kappa(m, l, kappa, theta, phi)
-        diff_g_f = g - f
-        # We add np.real to get rid of numerical issues.
-        d_loss += np.real(dg * np.conjugate(diff_g_f) + np.conjugate(dg) * diff_g_f)
+        inner_diff = sum_g - f
+        d_loss += np.real(dg * np.conjugate(inner_diff) + np.conjugate(dg) * inner_diff)
     return d_loss
 
 def grad_step(eta: np.ndarray, coeffs: dict, kappa: np.ndarray, theta: np.ndarray, phi: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     dk, dt, dp = d_L_d_kappa(coeffs, kappa, theta, phi), d_L_d_theta(coeffs, kappa, theta, phi), d_L_d_phi(coeffs, kappa, theta, phi)
     # dk = dt / dt.max()
     # dk = dp / dp.max()
-    kappa = kappa - eta[0] * dk
-    theta = theta - eta[1] * dt
-    phi = phi - eta[2] * dp
-    print(L(coeffs, kappa, theta, phi))
+    # kappa = np.clip(kappa - eta[0] * dk, 1e-5, 10)
+    theta = np.mod(theta - eta[1] * dt, 2 * np.pi)
+    phi = np.mod(phi - eta[2] * dp, np.pi)
+    print(L(coeffs, kappa, theta, phi), kappa.min(), theta.min(), phi.min())
     # print(np.sum(dk < 0))
     # print(dk.max(), dt.max(),dp.max())
 
@@ -205,12 +204,13 @@ def decompress(n: int, eta: np.ndarray, steps: int, coeffs: dict) -> np.ndarray:
     uniform_points = uniform_points / np.linalg.norm(uniform_points, axis=1)[:, np.newaxis]
     spherical = cartesian_to_spherical(uniform_points)
 
-    kappa = spherical[:, 0]
+    kappa = spherical[:, 0] * np.sqrt(3)
     theta = spherical[:, 1]
     phi = spherical[:, 2]
 
     for i in range(steps):
         kappa, theta, phi = grad_step(eta, coeffs, kappa, theta, phi)
+        
 
     return spherical_to_cartesian(kappa, theta, phi)
 
@@ -249,16 +249,18 @@ if __name__ == "__main__":
         [1, 1, 1]
     ]).astype(np.float64)
     kappa_max = 2
-    points = np.random.uniform(-1, 1, size=(1000, 3))
+    # points = np.random.uniform(-1, 1, size=(1000, 3))
     eta = np.array([0.001, 0.001, 0.001])
     coeffs = compress(points, 5)
     n = len(points)
-    steps = 1000
+    steps = 100000
     reconstruction = decompress(n, eta, steps, coeffs)
     import open3d as o3d
-    pcd1 = o3d.geometry.PointCloud()
-    pcd1.points = o3d.utility.Vector3dVector(points)
-
+    # pcd1 = o3d.geometry.PointCloud()
+    # pcd1.points = o3d.utility.Vector3dVector(points)
+    
     pcd2 = o3d.geometry.PointCloud()
     pcd2.points = o3d.utility.Vector3dVector(reconstruction)
     o3d.visualization.draw_geometries([pcd2])
+
+    
