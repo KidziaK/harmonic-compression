@@ -5,7 +5,7 @@ import numpy as np
 # from typing import Tuple
 # from functools import cache
 
-from math_utils import *
+from compression.math import *
 
 class Compressor:
     def __init__(self, l: int) -> None:

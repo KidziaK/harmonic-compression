@@ -12,20 +12,12 @@ References:
 
 import numpy as np
 
-from numba import njit
+from numba import njit, prange
 from scipy.special import iv, lpmv, sph_harm
 import numba_scipy
 
 
-__all__ = [
-    "cartesian_to_spherical",
-    "spherical_to_cartesian",
-    "standard_mises_fisher_harmonic_coefficients",
-    "wigner_d_function",
-    "reconstruct_from_harmonics"
-]
-
-@njit
+@njit(parallel=True, cache=True)
 def cartesian_to_spherical(points: np.ndarray) -> np.ndarray:
     """
     Given a numpy array of 3D points in Cartesian coordinates, convert them to spherical coordinates.
@@ -37,8 +29,8 @@ def cartesian_to_spherical(points: np.ndarray) -> np.ndarray:
         numpy array of points in spherical coordinates.
     """
     # https://mathworld.wolfram.com/SphericalCoordinates.html
-    result = np.zeros_like(points)
-    for i in range(points.shape[0]):
+    result = np.zeros_like(points, dtype=np.float32)
+    for i in prange(points.shape[0]):
         point = points[i]
         x, y, z = point[0], point[1], point[2]
         r = np.sqrt(np.dot(point, point))
@@ -52,7 +44,7 @@ def cartesian_to_spherical(points: np.ndarray) -> np.ndarray:
 
 
 
-@njit
+@njit(parallel=True, cache=True)
 def spherical_to_cartesian(r: np.ndarray, theta: np.ndarray, phi: np.ndarray) -> np.ndarray:
     """
     Given a numpy array of 3D points in spherical coordinates, convert them to Cartesian coordinates.
@@ -65,7 +57,7 @@ def spherical_to_cartesian(r: np.ndarray, theta: np.ndarray, phi: np.ndarray) ->
     """
     n = len(r)
     result = np.zeros(shape=(n, 3))
-    for i in range(n):
+    for i in prange(n):
         x = r[i] * np.cos(theta[i]) * np.sin(phi[i])
         y = r[i] * np.sin(theta[i]) * np.sin(phi[i])
         z = r[i] * np.cos(phi[i])
@@ -73,11 +65,11 @@ def spherical_to_cartesian(r: np.ndarray, theta: np.ndarray, phi: np.ndarray) ->
     return result
 
 
-@njit
+@njit(parallel=True, cache=True)
 def A(l: np.ndarray) -> np.ndarray:
     return np.sqrt((2 * l + 1) / (4 * np.pi))
 
-@njit
+@njit(parallel=True, cache=True)
 def B(l: np.ndarray, kappa: np.ndarray) -> np.ndarray:
     nl, nk = len(l), len(kappa)
     result = np.zeros(shape=(nl, nk))
@@ -86,18 +78,18 @@ def B(l: np.ndarray, kappa: np.ndarray) -> np.ndarray:
             result[i][j] = iv(l[i] + 0.5, kappa[j]) / iv(0.5, kappa[j])
     return result
 
-@njit
+@njit(parallel=True, cache=True)
 def standard_mises_fisher_harmonic_coefficients(l: np.ndarray, kappa: np.ndarray) -> np.ndarray:
     return A(l)[:, np.newaxis] * B(l, kappa)
 
-@njit
+@njit(parallel=True, cache=True)
 def factorial(n: int) -> int:
     result = 1
     for i in range(2, n + 1):
         result *= i
     return result
 
-@njit
+@njit(parallel=True, cache=True)
 def C(m: np.ndarray, l: np.ndarray) -> np.ndarray:
     nl, nm = len(l), len(m)
     result = np.zeros(shape=(nl, nm))
@@ -106,7 +98,7 @@ def C(m: np.ndarray, l: np.ndarray) -> np.ndarray:
             result[i][j] = np.sqrt(factorial(l[i] - m[j]) / factorial(l[i] + m[j]))
     return result
 
-@njit
+@njit(parallel=True, cache=True)
 def D(m: np.ndarray, l: np.ndarray, phi: np.ndarray) -> np.ndarray:
     nl, nm, nphi = len(l), len(m), len(phi)
     result = np.zeros(shape=(nl, nm, nphi))
@@ -116,11 +108,11 @@ def D(m: np.ndarray, l: np.ndarray, phi: np.ndarray) -> np.ndarray:
                 result[i][j][k] = lpmv(float(m[j]), float(l[i]), np.cos(phi[k]))
     return result
 
-@njit
+@njit(parallel=True, cache=True)
 def wigner_d_matrix(m: np.ndarray, l: np.ndarray, phi: np.ndarray) -> np.ndarray:
     return C(m, l)[:, :, np.newaxis] * D(m, l, phi)
 
-@njit
+@njit(parallel=True, cache=True)
 def E(m: np.ndarray, theta: np.ndarray) -> np.ndarray:
     nm, ntheta = len(m), len(theta)
     result = np.zeros(shape=(nm, ntheta), dtype=np.complex128)
@@ -129,7 +121,7 @@ def E(m: np.ndarray, theta: np.ndarray) -> np.ndarray:
             result[i][j] = np.exp(-1.0j * theta[j] * m[i])
     return result
 
-@njit
+@njit(parallel=True, cache=True)
 def wigner_d_function(m: np.ndarray, l: np.ndarray, theta: np.ndarray, phi: np.ndarray) -> np.ndarray:
     return E(m, theta)[np.newaxis, :, :] * wigner_d_matrix(m, l, phi)
 
