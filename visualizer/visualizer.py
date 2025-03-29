@@ -103,7 +103,7 @@ class SphericalMapVisualizer:
         glBindTexture(GL_TEXTURE_2D, heat_map_id)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, self.heat_map)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_FLOAT, self.heat_map)
         glBindTexture(GL_TEXTURE_2D, 0)
         return heat_map_id
 
