@@ -1,16 +1,36 @@
-import numpy as np
+from enum import Enum
+import quaternionic
 import scipy
+import spherical
 from numba import njit, prange
 from scipy.special import iv, lpmv
-import spherical
-import quaternionic
-import math
-import numba_scipy
+from tqdm import tqdm
+from utility.e57 import load_e57, numpy_to_e57
+import open3d as o3d
+import numpy as np
 
-from utility.e57 import load_e57
-
-l_max = 3
+l_max = 2
 wigner = spherical.Wigner(l_max + 1) # We need +1 for recurrence relation for derivative of wigner d
+
+def calculate_rmse_o3d(pcd1_np, pcd2_np):
+    pcd1 = o3d.geometry.PointCloud()
+    pcd1.points = o3d.utility.Vector3dVector(pcd1_np)
+    pcd2 = o3d.geometry.PointCloud()
+    pcd2.points = o3d.utility.Vector3dVector(pcd2_np)
+    distances = pcd1.compute_point_cloud_distance(pcd2)
+    rmse = np.sqrt(np.mean(np.asarray(distances)**2))
+    return rmse
+
+def calculate_chamfer_distance_o3d(pcd1_np, pcd2_np):
+    pcd1 = o3d.geometry.PointCloud()
+    pcd1.points = o3d.utility.Vector3dVector(pcd1_np)
+    pcd2 = o3d.geometry.PointCloud()
+    pcd2.points = o3d.utility.Vector3dVector(pcd2_np)
+    dist_p1_to_p2 = pcd1.compute_point_cloud_distance(pcd2)
+    dist_p2_to_p1 = pcd2.compute_point_cloud_distance(pcd1)
+    chamfer_distance = np.mean(np.asarray(dist_p1_to_p2)**2) + np.mean(np.asarray(dist_p2_to_p1)**2)
+    return chamfer_distance
+
 
 @njit(parallel=True)
 def cartesian_to_spherical(points):
@@ -68,6 +88,7 @@ def g(l, kappa):
     Since mu = (0, 0, 1), all complex spherical harmonic coefficients are equal to 0.
     """
     return (B(l) * iv(l + 0.5, kappa) / iv(0.5, kappa)).astype(np.complex128)
+    # return (B(l) * np.exp(kappa)).astype(np.complex128)
 
 @njit
 def g_(l, kappa):
@@ -87,10 +108,13 @@ def harmonic_f(wigner_D, f_tilda, ell_max: int):
                 f[i, l, m] = f_tilda[i, l] * wigner_D[i, spherical.WignerDindex(l, 0, m, 0, ell_max)]
     return f
 
+def calc_D(q):
+    return wigner.D(q)
+
 def compress(spherical_coords):
-    kappa = spherical_coords[:, 0].astype(np.float64)
-    theta = spherical_coords[:, 1].astype(np.float64)
-    phi = spherical_coords[:, 2].astype(np.float64)
+    kappa = spherical_coords[:, 0]
+    theta = spherical_coords[:, 1]
+    phi = spherical_coords[:, 2]
 
     l = np.arange(0, l_max + 1)
 
@@ -98,7 +122,7 @@ def compress(spherical_coords):
 
     f_tilda = g(l_grid, kappa_grid)
 
-    q = quaternionic.array.from_euler_angles(theta, phi, np.zeros_like(theta))
+    q = quaternionic.array.from_euler_angles(np.zeros_like(theta), phi, theta)
 
     D = wigner.D(q)
 
@@ -184,19 +208,34 @@ def df_dphi(d, kappa, theta, phi, ell_max: int):
 
     return df
 
-step = 0
-
 def loss(spherical_coords_flat, true_coefficients):
     n = len(spherical_coords_flat)
-    global step
     spherical_coords = spherical_coords_flat.reshape((3, n // 3)).T
     predicted_coefficients = compress(spherical_coords)
     F_tilda = predicted_coefficients.sum(axis=0)
     F = true_coefficients.sum(axis=0)
     diff = F_tilda - F
     L = np.real(np.conjugate(diff) * diff).sum()
-    # print(f"Loss at step {step} = {L}")
-    step += 1
+    return L
+
+def loss_theta_phi(theta_phi_flat, true_coefficients, kappa_start):
+    n = len(theta_phi_flat)
+    theta_phi = theta_phi_flat.reshape((2, n // 2)).T
+    spherical_coords = np.dstack((kappa_start, theta_phi[:, 0], theta_phi[:, 1])).squeeze(0)
+    predicted_coefficients = compress(spherical_coords)
+    # F_tilda = predicted_coefficients.sum(axis=0)
+    # F = true_coefficients.sum(axis=0)
+    diff = predicted_coefficients - true_coefficients
+    L = np.real(np.conjugate(diff) * diff).sum()
+    return L
+
+def loss_kappa(kappa, true_coefficients, theta, phi):
+    spherical_coords = np.dstack((kappa, theta, phi)).squeeze(0)
+    predicted_coefficients = compress(spherical_coords)
+    # F_tilda = predicted_coefficients.sum(axis=0)
+    # F = true_coefficients.sum(axis=0)
+    diff = predicted_coefficients - true_coefficients
+    L = np.real(np.conjugate(diff) * diff).sum()
     return L
 #
 # def grad_loss(spherical_coords_flat, true_coefficients):
@@ -229,65 +268,100 @@ def loss(spherical_coords_flat, true_coefficients):
 #
 #     return -np.hstack([dL_dkappa, dL_dtheta, dL_dphi])
 
+
+
+class PointCloud(Enum):
+    ST_SULPICE = "StSulpice-Cloud-50mm"
+    CUBE = "cube"
+    BUNNY = "Bunny"
+
 if __name__ == "__main__":
-    import time
+    debug_info = False
+    save_reconstruction = True
+    point_cloud_name = PointCloud.ST_SULPICE.value
 
-    points = load_e57("../data/Bunny.e57")[100:150]
-    # points = load_e57("../data/cube.e57")
+    point_cloud, colors = load_e57(f"../data/{point_cloud_name}.e57")
+    reconstructed_points = np.zeros_like(point_cloud)
+    radius_max = np.linalg.norm(point_cloud, axis=1, keepdims=True).max().astype(np.float32)
 
-    radius_max = np.linalg.norm(points, axis=1, keepdims=True).max()
-    points = points / radius_max
-    spherical_coords = cartesian_to_spherical(points)
+    batch_size = n = 32
+    for i in tqdm(range(len(point_cloud) // batch_size)):
+    # for i in range(10):
+        left = i * batch_size
+        right = min(len(point_cloud), (i + 1) * batch_size)
+        points = point_cloud[left:right]
 
-    kappa = spherical_coords[:, 0].astype(np.float64)
-    theta = spherical_coords[:, 1].astype(np.float64)
-    phi = spherical_coords[:, 2].astype(np.float64)
+        points = points / radius_max
+        spherical_coords = cartesian_to_spherical(points)
 
-    error_theta = 0.1
+        kappa = spherical_coords[:, 0].astype(np.float64)
+        theta = spherical_coords[:, 1].astype(np.float64)
+        phi = spherical_coords[:, 2].astype(np.float64)
 
-    kappa_start = 0.5 * np.ones_like(spherical_coords[:, 0])
-    theta_start = np.clip(spherical_coords[:, 1] + np.random.uniform(-error_theta, error_theta), 0.0, 2*np.pi)
-    phi_start = np.clip(spherical_coords[:, 2] + np.random.uniform(-0.1, 0.1), 0.0, np.pi)
-    # theta_start = np.random.uniform(0, 2 * np.pi, size=len(theta))
-    # phi_start = np.random.uniform(0, np.pi, size=len(phi))
+        kappa_start = 0.5 * np.ones_like(spherical_coords[:, 0])
+        theta_start = np.linspace(0, 2 * np.pi, len(theta))
+        phi_start = np.linspace(0, np.pi, len(phi))
 
-    st = time.time()
-    harmonic_coefficients = compress(spherical_coords).astype(np.complex64)
-    end = time.time()
+        harmonic_coefficients = compress(spherical_coords).astype(np.complex64)
 
-    print(f"compression took: {end - st} seconds")
+        bounds_kappa = np.array([[0, 1] for _ in range(n)])
 
-    n = len(kappa_start)
-    bounds_kappa = np.array([[0, 1] for _ in range(n)])
-    bounds_theta = np.array([[theta[i] - error_theta, theta[i] + error_theta] for i in range(n)])
-    bounds_theta =  np.clip(bounds_theta, 0, 2 * np.pi)
+        reconstruction_theta_phi = scipy.optimize.minimize(
+            loss_theta_phi,
+            np.hstack([theta_start, phi_start]),
+            (harmonic_coefficients, kappa_start),
+            # bounds=np.concatenate([bounds_theta, bounds_phi]),
+            # jac=grad_loss,
+            options={"disp": debug_info}
+        )
 
-    bounds_phi = np.array([[0, np.pi] for _ in range(n)])
+        theta_reconstructed = reconstruction_theta_phi.x[:n]
+        phi_reconstructed = reconstruction_theta_phi.x[n:2 * n]
 
-    bounds = np.concatenate([bounds_kappa, bounds_theta, bounds_phi])
+        reconstruction_kappa = scipy.optimize.minimize(
+            loss_kappa,
+            kappa_start,
+            (harmonic_coefficients, theta_reconstructed, phi_reconstructed),
+            bounds=bounds_kappa,
+            # jac=grad_loss,
+            options={"disp": debug_info}
+        )
 
-    reconstruction = scipy.optimize.minimize(loss, np.hstack([kappa_start, theta_start, phi_start]), harmonic_coefficients, bounds=bounds
-                                             # , jac=grad_loss
-                                             )
-    kappa_reconstructed = reconstruction.x[:n]
-    theta_reconstructed = reconstruction.x[n:2*n]
-    phi_reconstructed = reconstruction.x[2*n:3*n]
+        kappa_reconstructed = reconstruction_kappa.x[:n]
 
-    from sklearn.metrics import mean_squared_error
+        reconstruction_theta_phi = scipy.optimize.minimize(
+            loss_theta_phi,
+            np.hstack([theta_reconstructed, phi_reconstructed]),
+            (harmonic_coefficients, kappa_reconstructed),
+            # bounds=np.concatenate([bounds_theta, bounds_phi]),
+            # jac=grad_loss,
+            options={"disp": debug_info}
+        )
 
-    print(f"MSE(kappa) = {mean_squared_error(kappa, kappa_reconstructed)}")
-    print(f"MSE(theta) = {mean_squared_error(theta, theta_reconstructed)}")
-    print(f"MSE(phi) = {mean_squared_error(phi, phi_reconstructed)}")
+        theta_reconstructed = reconstruction_theta_phi.x[:n]
+        phi_reconstructed = reconstruction_theta_phi.x[n:2 * n]
 
-    print(f"PSNR(kappa) = {-10 * math.log(mean_squared_error(kappa, kappa_reconstructed))}")
-    print(f"PSNR(theta) = {20*np.log10(2 * np.pi) -10 * math.log(mean_squared_error(theta, theta_reconstructed))}")
-    print(f"PSNR(phi) = {20*np.log10(2 * np.pi)-10 * math.log(mean_squared_error(phi, phi_reconstructed))}")
+        reconstruction_kappa = scipy.optimize.minimize(
+            loss_kappa,
+            kappa_reconstructed,
+            (harmonic_coefficients, theta_reconstructed, phi_reconstructed),
+            bounds=bounds_kappa,
+            # jac=grad_loss,
+            options={"disp": debug_info}
+        )
 
-    st = time.time()
-    reconstructed_points = spherical_to_cartesian(kappa, theta, phi)
-    end = time.time()
+        kappa_reconstructed = reconstruction_kappa.x[:n]
 
-    print(f"reconstruction took: {end - st} seconds")
+        reconstructed_points[left:right] = spherical_to_cartesian(kappa_reconstructed, theta_reconstructed, phi_reconstructed) * radius_max
 
-    # print(points)
-    # print(reconstructed_points)
+    rmse_o3d = calculate_rmse_o3d(reconstructed_points, point_cloud)
+    chamfer_o3d = calculate_chamfer_distance_o3d(reconstructed_points, point_cloud)
+
+    print(f"RMSE (Open3D): {rmse_o3d}")
+    print(f"Chamfer Distance (Open3D): {chamfer_o3d}")
+
+    if save_reconstruction:
+        if colors is None:
+            colors = (255 * np.ones(shape=(len(reconstructed_points), 3))).astype(np.uint8)
+
+        numpy_to_e57(f"{point_cloud_name}-reconstructed-{batch_size}-v2.e57", reconstructed_points, colors)
