@@ -132,99 +132,11 @@ def compress(spherical_coords):
 def N(l: int):
     return np.sqrt((2 * l + 1) / (4 * np.pi))
 
-@njit(parallel=True)
-def dg_dkappa(kappa):
-    n = len(kappa)
-    dg = np.zeros(shape=(n, l_max + 1), dtype=np.complex128)
-    sqrt_2pi = np.sqrt(2 * np.pi)
-    for i in prange(n):
-        k = kappa[i]
-        sqrt_k = np.sqrt(k)
-        csch_k = 1 / np.sinh(k)
-        coth_k = np.cosh(k) / np.sinh(k)
-        for l in range(l_max + 1):
-            first_term = csch_k * iv(k, l + 0.5) / (4 * sqrt_2pi * sqrt_k)
-            second_term = sqrt_k * csch_k * (iv(k, l - 0.5) + iv(k, l + 1.5)) / (4 * sqrt_2pi)
-            third_term = sqrt_k * coth_k * csch_k * iv(k, l + 0.5) / (2 * sqrt_2pi)
-            dg[i, l] = first_term + second_term - third_term
-    return dg
-
-@njit(parallel=True)
-def df_dkappa(wigner_D, kappa, ell_max: int):
-    num_points = wigner_D.shape[0]
-    df = np.zeros(shape=(num_points, ell_max + 1, ell_max + 1), dtype=np.complex128)
-    sqrt_2pi = np.sqrt(2 * np.pi)
-    for i in prange(num_points):
-        k = kappa[i]
-        sqrt_k = np.sqrt(k)
-        csch_k = 1 / np.sinh(k)
-        coth_k = np.cosh(k) / np.sinh(k)
-        for l in range(ell_max + 1):
-            first_term = csch_k * iv(k, l + 0.5) / (4 * sqrt_2pi * sqrt_k)
-            second_term = sqrt_k * csch_k * (iv(k, l - 0.5) + iv(k, l + 1.5)) / (4 * sqrt_2pi)
-            third_term = sqrt_k * coth_k * csch_k * iv(k, l + 0.5) / (2 * sqrt_2pi)
-            dg = first_term + second_term - third_term
-            for m in range(l + 1):
-                df[i, l, m] = wigner_D[i, spherical.WignerDindex(l, 0, m, 0, ell_max)] * dg
-    return df
-
-@njit
-def factorial(x):
-    if x == 0:
-        return 1
-    return x * factorial(x - 1)
-
-@njit(parallel=True)
-def df_dtheta(d, kappa, theta, phi, ell_max: int):
-    num_points = len(theta)
-    df = np.zeros(shape=(num_points, ell_max + 1, ell_max + 1), dtype=np.complex128)
-
-    for i in prange(num_points):
-        for l in range(ell_max + 1):
-            for m in range(l + 1):
-                if m == 0:
-                    dd = -np.sqrt(l * (l+1)) * d[i, spherical.WignerDindex(l, 0, m + 1, 0, ell_max)]
-                    dD = np.exp(-1j * m * phi[i]) * dd
-                    df[i, l, m] = dD * g_(l, kappa[i])
-                else:
-                    constant = 0.5 * np.sqrt(factorial(l - m)/factorial(l + m))
-                    legendre_1 = (l + m) * (l - m + 1) * lpmv(float(m - 1), float(l), np.cos(theta[i]))
-                    legendre_2 = lpmv(float(m - 1), float(l), np.cos(theta[i]))
-                    dD = np.exp(-1j * m * phi[i]) * constant * (legendre_1 - legendre_2)
-                    df[i, l, m] = dD * g_(l, kappa[i])
-
-    return df
-
-@njit(parallel=True)
-def df_dphi(d, kappa, theta, phi, ell_max: int):
-    num_points = len(theta)
-    df = np.zeros(shape=(num_points, ell_max + 1, ell_max + 1), dtype=np.complex128)
-
-    for i in prange(num_points):
-        for l in range(ell_max + 1):
-            for m in range(l + 1):
-                dml = d[i, spherical.WignerDindex(l, 0, m, 0, ell_max)]
-                df[i, l, m] = - 1j * m * np.exp(-1j * m * phi[i]) * dml * g_(l, kappa[i])
-
-    return df
-
-def loss(spherical_coords_flat, true_coefficients):
-    n = len(spherical_coords_flat)
-    spherical_coords = spherical_coords_flat.reshape((3, n // 3)).T
-    predicted_coefficients = compress(spherical_coords)
-    F_tilda = predicted_coefficients.sum(axis=0)
-    F = true_coefficients.sum(axis=0)
-    diff = F_tilda - F
-    L = np.real(np.conjugate(diff) * diff).sum()
-    return L
-
 def loss_theta_phi(theta_phi_flat, true_coefficients, kappa_start):
     n = len(theta_phi_flat)
     theta_phi = theta_phi_flat.reshape((2, n // 2)).T
     spherical_coords = np.dstack((kappa_start, theta_phi[:, 0], theta_phi[:, 1])).squeeze(0)
     predicted_coefficients = compress(spherical_coords)
-    # F_tilda = predicted_coefficients.sum(axis=0)
-    # F = true_coefficients.sum(axis=0)
     diff = predicted_coefficients - true_coefficients
     L = np.real(np.conjugate(diff) * diff).sum()
     return L
@@ -232,43 +144,9 @@ def loss_theta_phi(theta_phi_flat, true_coefficients, kappa_start):
 def loss_kappa(kappa, true_coefficients, theta, phi):
     spherical_coords = np.dstack((kappa, theta, phi)).squeeze(0)
     predicted_coefficients = compress(spherical_coords)
-    # F_tilda = predicted_coefficients.sum(axis=0)
-    # F = true_coefficients.sum(axis=0)
     diff = predicted_coefficients - true_coefficients
     L = np.real(np.conjugate(diff) * diff).sum()
     return L
-#
-# def grad_loss(spherical_coords_flat, true_coefficients):
-#     n = len(spherical_coords_flat)
-#     spherical_coords = spherical_coords_flat.reshape((3, n // 3)).T
-#     predicted_coefficients = compress(spherical_coords)
-#     F_tilda = predicted_coefficients.sum(axis=0)
-#     F = true_coefficients.sum(axis=0)
-#     diff = F_tilda - F
-#
-#     kappa = spherical_coords[:, 0].astype(np.float64)
-#     theta = spherical_coords[:, 1].astype(np.float64)
-#     phi = spherical_coords[:, 2].astype(np.float64)
-#
-#     q = quaternionic.array.from_euler_angles(theta, phi, np.zeros_like(theta))
-#
-#     D = wigner.D(q)
-#     d_list = []
-#     for i in range(len(theta)):
-#         d_list.append(wigner.d(np.exp(1j * theta[i])))
-#     d = np.array(d_list)
-#
-#     dkappa = df_dkappa(D, kappa, l_max)
-#     dtheta = df_dtheta(d, kappa, theta, phi, l_max)
-#     dphi = df_dphi(d, kappa, theta, phi, l_max)
-#
-#     dL_dkappa = np.real(np.conjugate(dkappa) * diff).mean(axis=(1, 2))
-#     dL_dtheta = np.real(np.conjugate(dtheta) * diff).mean(axis=(1, 2))
-#     dL_dphi = np.real(np.conjugate(dphi) * diff).mean(axis=(1, 2))
-#
-#     return -np.hstack([dL_dkappa, dL_dtheta, dL_dphi])
-
-
 
 class PointCloud(Enum):
     ST_SULPICE = "StSulpice-Cloud-50mm"
@@ -278,13 +156,13 @@ class PointCloud(Enum):
 if __name__ == "__main__":
     debug_info = False
     save_reconstruction = True
-    point_cloud_name = PointCloud.ST_SULPICE.value
+    point_cloud_name = PointCloud.CUBE.value
 
     point_cloud, colors = load_e57(f"../data/{point_cloud_name}.e57")
     reconstructed_points = np.zeros_like(point_cloud)
     radius_max = np.linalg.norm(point_cloud, axis=1, keepdims=True).max().astype(np.float32)
 
-    batch_size = n = 32
+    batch_size = n = 8
     for i in tqdm(range(len(point_cloud) // batch_size)):
     # for i in range(10):
         left = i * batch_size
@@ -310,8 +188,6 @@ if __name__ == "__main__":
             loss_theta_phi,
             np.hstack([theta_start, phi_start]),
             (harmonic_coefficients, kappa_start),
-            # bounds=np.concatenate([bounds_theta, bounds_phi]),
-            # jac=grad_loss,
             options={"disp": debug_info}
         )
 
@@ -323,7 +199,6 @@ if __name__ == "__main__":
             kappa_start,
             (harmonic_coefficients, theta_reconstructed, phi_reconstructed),
             bounds=bounds_kappa,
-            # jac=grad_loss,
             options={"disp": debug_info}
         )
 
@@ -333,8 +208,6 @@ if __name__ == "__main__":
             loss_theta_phi,
             np.hstack([theta_reconstructed, phi_reconstructed]),
             (harmonic_coefficients, kappa_reconstructed),
-            # bounds=np.concatenate([bounds_theta, bounds_phi]),
-            # jac=grad_loss,
             options={"disp": debug_info}
         )
 
@@ -346,7 +219,6 @@ if __name__ == "__main__":
             kappa_reconstructed,
             (harmonic_coefficients, theta_reconstructed, phi_reconstructed),
             bounds=bounds_kappa,
-            # jac=grad_loss,
             options={"disp": debug_info}
         )
 
