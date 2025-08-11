@@ -14,7 +14,7 @@
 
 #include <dlib/optimization.h>
 #include <dlib/matrix.h>
-
+#include "nanoflann.hpp"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -94,17 +94,28 @@ struct PC {
         result.x_coords.resize(totalPointCount);
         result.y_coords.resize(totalPointCount);
         result.z_coords.resize(totalPointCount);
-        result.red.resize(totalPointCount);
-        result.green.resize(totalPointCount);
-        result.blue.resize(totalPointCount);
 
         e57::Data3DPointsDouble buffers;
         buffers.cartesianX = result.x_coords.data();
         buffers.cartesianY = result.y_coords.data();
         buffers.cartesianZ = result.z_coords.data();
-        buffers.colorRed = result.red.data();
-        buffers.colorGreen = result.green.data();
-        buffers.colorBlue = result.blue.data();
+        buffers.colorRed = nullptr;
+        buffers.colorGreen = nullptr;
+        buffers.colorBlue = nullptr;
+
+        if (scanHeader.pointFields.colorRedField) {
+            result.red.resize(totalPointCount);
+            result.green.resize(totalPointCount);
+            result.blue.resize(totalPointCount);
+            buffers.colorRed = result.red.data();
+            buffers.colorGreen = result.green.data();
+            buffers.colorBlue = result.blue.data();
+        } else {
+            const uint16_t white = 65535;
+            result.red.assign(totalPointCount, white);
+            result.green.assign(totalPointCount, white);
+            result.blue.assign(totalPointCount, white);
+        }
 
         e57::CompressedVectorReader dataReader = reader.SetUpData3DPointsData(0, totalPointCount, buffers);
         dataReader.read();
@@ -207,4 +218,73 @@ Coeffs_T<T> compress(const std::vector<T>& kappa, const std::vector<T>& theta, c
         }
     }
     return result;
+}
+
+template <typename T>
+struct PointCloudAdapter {
+    const PC_T<T>& obj;
+
+    PointCloudAdapter(const PC_T<T>& obj_) : obj(obj_) {}
+
+    inline size_t kdtree_get_point_count() const { return obj.x_coords.size(); }
+
+    inline T kdtree_get_pt(const size_t idx, const size_t dim) const {
+        if (dim == 0) return obj.x_coords[idx];
+        if (dim == 1) return obj.y_coords[idx];
+        if (dim == 2) return obj.z_coords[idx];
+        return 0;
+    }
+
+    template <class BBOX>
+    bool kdtree_get_bbox(BBOX& /* bb */) const { return false; }
+};
+
+template <typename T>
+void calculate_distances(const PC_T<T>& pc1, const PC_T<T>& pc2, double& chamfer_dist, double& hausdorff_dist) {
+    PointCloudAdapter<T> pc1_adapter(pc1);
+    PointCloudAdapter<T> pc2_adapter(pc2);
+
+    using my_kd_tree_t = nanoflann::KDTreeSingleIndexAdaptor<
+        nanoflann::L2_Simple_Adaptor<T, PointCloudAdapter<T>>,
+        PointCloudAdapter<T>,
+        3
+    >;
+
+    my_kd_tree_t index1(3, pc1_adapter, {10});
+    my_kd_tree_t index2(3, pc2_adapter, {10});
+
+    double sum_dist1 = 0.0;
+    double max_dist1 = 0.0;
+    #pragma omp parallel for reduction(+:sum_dist1) reduction(max:max_dist1)
+    for (size_t i = 0; i < pc2.x_coords.size(); ++i) {
+        T query_pt[3] = {pc2.x_coords[i], pc2.y_coords[i], pc2.z_coords[i]};
+        size_t ret_index;
+        T out_dist_sqr;
+        nanoflann::KNNResultSet<T> resultSet(1);
+        resultSet.init(&ret_index, &out_dist_sqr);
+        index1.findNeighbors(resultSet, &query_pt[0]);
+        sum_dist1 += out_dist_sqr;
+        if (out_dist_sqr > max_dist1) {
+            max_dist1 = out_dist_sqr;
+        }
+    }
+
+    double sum_dist2 = 0.0;
+    double max_dist2 = 0.0;
+    #pragma omp parallel for reduction(+:sum_dist2) reduction(max:max_dist2)
+    for (size_t i = 0; i < pc1.x_coords.size(); ++i) {
+        T query_pt[3] = {pc1.x_coords[i], pc1.y_coords[i], pc1.z_coords[i]};
+        size_t ret_index;
+        T out_dist_sqr;
+        nanoflann::KNNResultSet<T> resultSet(1);
+        resultSet.init(&ret_index, &out_dist_sqr);
+        index2.findNeighbors(resultSet, &query_pt[0]);
+        sum_dist2 += out_dist_sqr;
+        if (out_dist_sqr > max_dist2) {
+            max_dist2 = out_dist_sqr;
+        }
+    }
+
+    chamfer_dist = (sum_dist1 / pc2.x_coords.size()) + (sum_dist2 / pc1.x_coords.size());
+    hausdorff_dist = std::sqrt(std::max(max_dist1, max_dist2));
 }

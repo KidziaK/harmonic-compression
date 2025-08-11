@@ -2,12 +2,8 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/build/_deps/libe57format-src" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/build/_deps/libe57format-src/test/extern/googletest" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/cmake-build-debug/_deps/dlib-src" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/cmake-build-debug/_deps/libe57format-src" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/cmake-build-debug/_deps/libe57format-src/test/extern/googletest" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/cmake-build-debug/_deps/sphericalfunctions-src" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/cmake-build-debug/_deps/sphericalfunctions-src/Quaternions" vcs="Git" />
   </component>
 </project>
