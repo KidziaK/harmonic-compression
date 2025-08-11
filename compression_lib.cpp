@@ -11,8 +11,8 @@ using column_vector_d = dlib::matrix<double, 0, 1>;
 
 class LossThetaPhi {
 public:
-    LossThetaPhi(const Coeffs& true_coeffs, const std::vector<T>& kappa, int l_max)
-        : true_coeffs_(true_coeffs), kappa_values_(kappa), l_max_(l_max) {}
+    LossThetaPhi(const Coeffs& true_coeffs, const std::vector<T>& kappa, int l_max, const BesselCache<T>& cache)
+        : true_coeffs_(true_coeffs), kappa_values_(kappa), l_max_(l_max), cache_(cache) {}
 
     double operator()(const column_vector_d& params) const {
         const size_t n = kappa_values_.size();
@@ -21,7 +21,7 @@ public:
             theta[i] = static_cast<T>(params(i));
             phi[i] = static_cast<T>(params(i + n));
         }
-        Coeffs predicted_coeffs = compress<T>(kappa_values_, theta, phi, l_max_);
+        Coeffs predicted_coeffs = compress<T>(theta, phi, l_max_, cache_);
         T loss = 0.0f;
         for (size_t i = 0; i < n; ++i) {
             for (int l = 0; l <= l_max_; ++l) {
@@ -36,12 +36,13 @@ private:
     const Coeffs& true_coeffs_;
     const std::vector<T>& kappa_values_;
     int l_max_;
+    const BesselCache<T>& cache_;
 };
 
 class LossKappa {
 public:
-    LossKappa(const Coeffs& true_coeffs, const std::vector<T>& theta, const std::vector<T>& phi, int l_max)
-        : true_coeffs_(true_coeffs), theta_values_(theta), phi_values_(phi), l_max_(l_max) {}
+    LossKappa(const Coeffs& true_coeffs, const std::vector<T>& theta, const std::vector<T>& phi, int l_max, const WignerCache<T>& cache)
+        : true_coeffs_(true_coeffs), theta_values_(theta), phi_values_(phi), l_max_(l_max), cache_(cache) {}
 
     double operator()(const column_vector_d& params) const {
         const size_t n = theta_values_.size();
@@ -49,7 +50,7 @@ public:
         for (size_t i = 0; i < n; ++i) {
             kappa[i] = static_cast<T>(params(i));
         }
-        Coeffs predicted_coeffs = compress<T>(kappa, theta_values_, phi_values_, l_max_);
+        Coeffs predicted_coeffs = compress<T>(kappa, l_max_, cache_);
         T loss = 0.0f;
         for (size_t i = 0; i < n; ++i) {
             for (int l = 0; l <= l_max_; ++l) {
@@ -65,6 +66,7 @@ private:
     const std::vector<T>& theta_values_;
     const std::vector<T>& phi_values_;
     int l_max_;
+    const WignerCache<T>& cache_;
 };
 
 void process_point_cloud(
@@ -102,8 +104,8 @@ void process_point_cloud(
     reconstructed_full.green = point_cloud.green;
     reconstructed_full.blue = point_cloud.blue;
     reconstructed_full.x_coords.resize(point_cloud.x_coords.size());
-    reconstructed_full.y_coords.resize(point_cloud.y_coords.size());
-    reconstructed_full.z_coords.resize(point_cloud.z_coords.size());
+    reconstructed_full.y_coords.resize(point_cloud.x_coords.size());
+    reconstructed_full.z_coords.resize(point_cloud.x_coords.size());
 
     const size_t max_batches = std::min(total_batches_to_process, point_cloud.x_coords.size() / n);
 
@@ -157,14 +159,18 @@ void process_point_cloud(
         for (int iter = 0; iter < 1; ++iter) {
             std::vector<T> current_kappa_f(n);
             for(int k=0; k<n; ++k) current_kappa_f[k] = static_cast<T>(kappa_params_d(k));
-            dlib::find_min_bobyqa(LossThetaPhi(true_coefficients, current_kappa_f, l_max), theta_phi_params_d, 2 * (2*n) + 1, lower_b, upper_b, rho_begin_theta_phi, rho_end_theta_phi, max_evals_theta_phi);
+
+            BesselCache<T> bessel_cache(l_max, n, current_kappa_f);
+            dlib::find_min_bobyqa(LossThetaPhi(true_coefficients, current_kappa_f, l_max, bessel_cache), theta_phi_params_d, 2 * (2*n) + 1, lower_b, upper_b, rho_begin_theta_phi, rho_end_theta_phi, max_evals_theta_phi);
 
             std::vector<T> current_theta_f(n), current_phi_f(n);
             for(int k=0; k<n; ++k) {
                 current_theta_f[k] = static_cast<T>(theta_phi_params_d(k));
                 current_phi_f[k] = static_cast<T>(theta_phi_params_d(k+n));
             }
-            dlib::find_min_bobyqa(LossKappa(true_coefficients, current_theta_f, current_phi_f, l_max), kappa_params_d, 2 * n + 1, lower_b_k, upper_b_k, rho_begin_kappa, rho_end_kappa, max_evals_kappa);
+
+            WignerCache<T> wigner_cache(l_max, n, current_theta_f, current_phi_f);
+            dlib::find_min_bobyqa(LossKappa(true_coefficients, current_theta_f, current_phi_f, l_max, wigner_cache), kappa_params_d, 2 * n + 1, lower_b_k, upper_b_k, rho_begin_kappa, rho_end_kappa, max_evals_kappa);
         }
 
         PC_comp reconstructed_batch;

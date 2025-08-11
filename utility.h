@@ -204,6 +204,35 @@ template <typename T>
 using Coeffs_T = std::vector<std::vector<std::vector<std::complex<T>>>>;
 
 template <typename T>
+struct BesselCache {
+    std::vector<std::vector<T>> g_bessel_cache;
+    BesselCache(int l_max, int n, const std::vector<T>& kappa) {
+        g_bessel_cache.resize(n, std::vector<T>(l_max + 1));
+        for (int i = 0; i < n; ++i) {
+            for (int l = 0; l <= l_max; ++l) {
+                g_bessel_cache[i][l] = g_bessel<T>(l, kappa[i]);
+            }
+        }
+    }
+};
+
+template <typename T>
+struct WignerCache {
+    std::vector<std::vector<std::vector<std::complex<T>>>> d_exp_cache;
+    WignerCache(int l_max, int n, const std::vector<T>& theta, const std::vector<T>& phi) {
+        d_exp_cache.resize(n, std::vector<std::vector<std::complex<T>>>(l_max + 1));
+        for (int i = 0; i < n; ++i) {
+            for (int l = 0; l <= l_max; ++l) {
+                d_exp_cache[i][l].resize(2 * l + 1);
+                for (int m = -l; m <= l; ++m) {
+                    d_exp_cache[i][l][m + l] = d_matrix<T>(l, 0, m, phi[i]) * std::exp(std::complex<T>(0, -m * theta[i]));
+                }
+            }
+        }
+    }
+};
+
+template <typename T>
 Coeffs_T<T> compress(const std::vector<T>& kappa, const std::vector<T>& theta, const std::vector<T>& phi, int l_max) {
     size_t n = kappa.size();
     Coeffs_T<T> result(n, std::vector<std::vector<std::complex<T>>>(l_max + 1));
@@ -214,6 +243,39 @@ Coeffs_T<T> compress(const std::vector<T>& kappa, const std::vector<T>& theta, c
             for(int m = -l; m <=l; ++m) {
                  std::complex<T> D_val = d_matrix<T>(l, 0, m, phi[i]) * std::exp(std::complex<T>(0, -m * theta[i]));
                  result[i][l][m+l] = f_tilda * D_val;
+            }
+        }
+    }
+    return result;
+}
+
+template <typename T>
+Coeffs_T<T> compress(const std::vector<T>& theta, const std::vector<T>& phi, int l_max, const BesselCache<T>& cache) {
+    size_t n = theta.size();
+    Coeffs_T<T> result(n, std::vector<std::vector<std::complex<T>>>(l_max + 1));
+    for(size_t i = 0; i < n; ++i) {
+        for(int l = 0; l <= l_max; ++l) {
+            result[i][l].resize(2 * l + 1);
+            T f_tilda = cache.g_bessel_cache[i][l];
+            for(int m = -l; m <=l; ++m) {
+                 std::complex<T> D_val = d_matrix<T>(l, 0, m, phi[i]) * std::exp(std::complex<T>(0, -m * theta[i]));
+                 result[i][l][m+l] = f_tilda * D_val;
+            }
+        }
+    }
+    return result;
+}
+
+template <typename T>
+Coeffs_T<T> compress(const std::vector<T>& kappa, int l_max, const WignerCache<T>& cache) {
+    size_t n = kappa.size();
+    Coeffs_T<T> result(n, std::vector<std::vector<std::complex<T>>>(l_max + 1));
+    for(size_t i = 0; i < n; ++i) {
+        for(int l = 0; l <= l_max; ++l) {
+            result[i][l].resize(2 * l + 1);
+            T f_tilda = g_bessel<T>(l, kappa[i]);
+            for(int m = -l; m <=l; ++m) {
+                 result[i][l][m+l] = f_tilda * cache.d_exp_cache[i][l][m+l];
             }
         }
     }
