@@ -189,7 +189,6 @@ void process_point_cloud(
 
         #pragma omp critical
         {
-            std::cout << "--- Finished Optimization for Batch " << i << " (Thread " << omp_get_thread_num() << ") ---" << std::endl;
             for(size_t j=0; j<n; ++j){
                 size_t dest_idx = start_idx + j;
                 reconstructed_full.x_coords[dest_idx] = reconstructed_batch.x_coords[j] * radius_max;
@@ -208,5 +207,4 @@ void process_point_cloud(
     reconstructed_full_double.z_coords.assign(reconstructed_full.z_coords.begin(), reconstructed_full.z_coords.end());
 
     reconstructed_full_double.to_e57(output_path);
-    std::cout << "Full reconstruction saved to " << output_path << std::endl;
 }
